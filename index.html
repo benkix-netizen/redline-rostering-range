@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Redline Rostering Range</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: #0a0a0c;
+    color: #fff;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 2rem 1rem;
+  }
+  h1 {
+    font-size: 22px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    color: #e8e8ea;
+    margin-bottom: 8px;
+  }
+  p.sub {
+    font-size: 14px;
+    color: #8a8a90;
+    margin-bottom: 2.5rem;
+    text-align: center;
+  }
+  .cards {
+    display: flex;
+    gap: 1.25rem;
+    flex-wrap: wrap;
+    justify-content: center;
+    max-width: 760px;
+  }
+  .card {
+    width: 320px;
+    padding: 1.75rem 1.5rem;
+    border-radius: 14px;
+    text-decoration: none;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+    border: 1px solid rgba(255,255,255,0.08);
+  }
+  .card:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 10px 30px rgba(0,0,0,0.4);
+  }
+  .card.lkf { background: linear-gradient(160deg, #143d25, #0d2418); }
+  .card.discovery { background: linear-gradient(160deg, #3a2212, #1c1008); }
+  .card .venue {
+    font-size: 19px;
+    font-weight: 700;
+  }
+  .card.lkf .venue { color: #FFD700; }
+  .card.discovery .venue { color: #ff8c42; }
+  .card .desc {
+    font-size: 13px;
+    color: #c8c8cc;
+    line-height: 1.5;
+  }
+  .card .cta {
+    margin-top: 10px;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.3px;
+  }
+  .card.lkf .cta { color: #FFD700; }
+  .card.discovery .cta { color: #ff8c42; }
+</style>
+</head>
+<body>
+  <h1>Redline Rostering Range</h1>
+  <p class="sub">Pick a venue to view its roster or submit your availability.</p>
+  <div class="cards">
+    <a class="card lkf" href="https://benkix-netizen.github.io/dj-availability/roster.html">
+      <span class="venue">LKF Bar</span>
+      <span class="desc">DJ roster, calendar invites, and availability form.</span>
+      <span class="cta">View roster →</span>
+    </a>
+    <a class="card discovery" href="https://benkix-netizen.github.io/discovery-fusion-bbq-availability/roster.html">
+      <span class="venue">Discovery Fusion BBQ</span>
+      <span class="desc">DJ roster, calendar invites, and availability form.</span>
+      <span class="cta">View roster →</span>
+    </a>
+  </div>
+</body>
+</html>
