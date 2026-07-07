@@ -96,8 +96,8 @@
   // Discovery's flat "Roster" tab: fixed name, current operational month lives
   // in a "Month: <Month> <Year>" header cell.
   async function fetchRosterRows(sheetId) {
-    const url = `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv&sheet=Roster&headers=1`;
-    const res = await fetch(url);
+    const url = `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv&sheet=Roster&headers=1&_=${Date.now()}`;
+    const res = await fetch(url, { cache: "no-store" });
     if (!res.ok) throw new Error(`Sheet fetch failed (${res.status})`);
     return parseCsv(await res.text());
   }
@@ -108,8 +108,8 @@
   // rather than an error.
   async function fetchCsvBySheetName(sheetId, name) {
     try {
-      const url = `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(name)}&headers=1`;
-      const res = await fetch(url);
+      const url = `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(name)}&headers=1&_=${Date.now()}`;
+      const res = await fetch(url, { cache: "no-store" });
       if (!res.ok) return [];
       const rows = parseCsv(await res.text());
       if (rows.length && /<html/i.test(rows[0][0] || "")) return [];
