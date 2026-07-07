@@ -56,9 +56,20 @@
   </div>
 
 <script>
+  // Both venues' actual DJ assignments live on a per-month planning/invoice
+  // grid tab, not the older flat "Roster" tab (which neither script's
+  // generateRoster() keeps in sync with real assignments -- it's a dead
+  // leftover of the DJ-facing display for both venues). tabName builds each
+  // venue's own naming convention for that tab.
   const VENUES = [
-    { key: "lkf", name: "LKF Bar", sheetId: "18k60OYTIlCBkWXOLs4rSb-NsxnWrjwNsQlfjnWpqZwA", kind: "grid" },
-    { key: "discovery", name: "Discovery Fusion BBQ", sheetId: "1hgmPI32q6VIGeazKSpR6A_wzwP8l4sQqLMIlfZ2snng", kind: "flat" }
+    {
+      key: "lkf", name: "LKF Bar", sheetId: "18k60OYTIlCBkWXOLs4rSb-NsxnWrjwNsQlfjnWpqZwA",
+      tabName: (monthIdx, year) => `Roster - ${MONTHS[monthIdx]} ${year}`
+    },
+    {
+      key: "discovery", name: "Discovery Fusion BBQ", sheetId: "1hgmPI32q6VIGeazKSpR6A_wzwP8l4sQqLMIlfZ2snng",
+      tabName: (monthIdx, year) => `${MONTH_ABBR[monthIdx].toUpperCase()} ${String(year).slice(-2)}`
+    }
   ];
   const MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
   const MONTH_ABBR = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
@@ -91,19 +102,10 @@
     return rows.filter(r => r.some(cell => cell !== ""));
   }
 
-  // Discovery's flat "Roster" tab: fixed name, current operational month lives
-  // in a "Month: <Month> <Year>" header cell.
-  async function fetchRosterRows(sheetId) {
-    const url = `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv&sheet=Roster&headers=1&_=${Date.now()}`;
-    const res = await fetch(url, { cache: "no-store" });
-    if (!res.ok) throw new Error(`Sheet fetch failed (${res.status})`);
-    return parseCsv(await res.text());
-  }
-
-  // LKF's per-month "Roster - <Month Year>" grid tab. Returns [] if that tab
-  // doesn't exist yet -- gviz returns an HTML error page (not CSV) for a
-  // sheet name that doesn't exist, which we treat as "nothing generated yet"
-  // rather than an error.
+  // Each venue's per-month grid tab. Returns [] if that tab doesn't exist yet
+  // -- gviz returns an HTML error page (not CSV) for a sheet name that
+  // doesn't exist, which we treat as "nothing generated yet" rather than an
+  // error.
   async function fetchCsvBySheetName(sheetId, name) {
     try {
       const url = `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(name)}&headers=1&_=${Date.now()}`;
@@ -115,43 +117,6 @@
     } catch (err) {
       return [];
     }
-  }
-
-  function indexHeader(headerRow) {
-    const idx = {};
-    headerRow.forEach((name, i) => { idx[name.trim()] = i; });
-    return idx;
-  }
-
-  function parseRosterSlots(rows) {
-    const m = /^Month:\s*([A-Za-z]+)\s+(\d{4})/.exec((rows[0][0] || "").trim());
-    if (!m) throw new Error("Couldn't find 'Month: <Month> <Year>' header in Roster tab.");
-    const monthIdx = MONTHS.indexOf(m[1]);
-    const year = parseInt(m[2], 10);
-
-    const idx = indexHeader(rows[1]);
-    const DATE_COL = 0; // gviz can strip this header cell's text, so use its fixed position
-    const slots = [];
-    for (let i = 2; i < rows.length; i++) {
-      const r = rows[i];
-      const dateLabel = (r[DATE_COL] || "").trim();
-      if (!dateLabel) continue;
-      const dayNum = parseInt(dateLabel, 10);
-      if (Number.isNaN(dayNum)) continue;
-
-      const setTime = idx["Set Time"] > -1
-        ? (r[idx["Set Time"]] || "").trim()
-        : `${(r[idx["Start"]] || "").trim()} – ${(r[idx["End"]] || "").trim()}`;
-
-      slots.push({
-        dateLabel,
-        day: (r[idx["Day"]] || "").trim(),
-        setTime,
-        assignedDJ: (r[idx["Assigned DJ"]] || "").trim(),
-        dayNum, monthIdx, year
-      });
-    }
-    return slots;
   }
 
   function to12hLabel(hour, minute) {
@@ -175,19 +140,21 @@
     return title === monthLabel.toUpperCase();
   }
 
-  // Parses LKF's week-by-week planning grid: WEEK header rows, then one row
-  // per set with real Start/Finish time cells and an Assigned DJ dropdown,
-  // followed by a trailing per-DJ stats block. Stops as soon as a row
-  // doesn't look like a week header or a date row ("Thursday, 2 July"),
-  // which is exactly where that stats block begins.
+  // Parses a week-by-week planning grid: WEEK header rows, then one row per
+  // set with real Start/Finish (or Start/End) time cells and an Assigned DJ
+  // column, interleaved with filler rows this shape doesn't care about --
+  // blank rows, WEEK headers, and (on Discovery's invoice-tab variant)
+  // WEEKLY TOTAL/HOURS/AMOUNT rows between weeks, plus a trailing per-DJ
+  // stats block after the last week. Any row whose first cell isn't a real
+  // "Thursday, 2 July"-style date is simply skipped, not treated as the end
+  // of the data -- LKF's grid has no such filler rows, but Discovery's does.
   function parseGridSlots(rows, requestedMonthIdx, requestedYear) {
     const slots = [];
     for (let i = 2; i < rows.length; i++) {
       const r = rows[i];
       const colA = (r[0] || "").trim();
       if (colA === "") continue;
-      if (/^WEEK\s+\d+$/i.test(colA)) continue;
-      if (!colA.includes(",")) break;
+      if (!colA.includes(",")) continue;
 
       const [dayName, datePart] = colA.split(",").map(s => s.trim());
       const dm = /^(\d{1,2})\s+([A-Za-z]+)$/.exec(datePart || "");
@@ -213,15 +180,12 @@
   }
 
   async function fetchVenueSlots(venue) {
-    if (venue.kind === "grid") {
-      const now = new Date();
-      const monthLabel = `${MONTHS[now.getMonth()]} ${now.getFullYear()}`;
-      const rows = await fetchCsvBySheetName(venue.sheetId, `Roster - ${monthLabel}`);
-      if (rows.length === 0 || !rosterMonthMatches(rows, monthLabel)) return [];
-      return parseGridSlots(rows, now.getMonth(), now.getFullYear());
-    }
-    const rows = await fetchRosterRows(venue.sheetId);
-    return parseRosterSlots(rows);
+    const now = new Date();
+    const monthIdx = now.getMonth(), year = now.getFullYear();
+    const monthLabel = `${MONTHS[monthIdx]} ${year}`;
+    const rows = await fetchCsvBySheetName(venue.sheetId, venue.tabName(monthIdx, year));
+    if (rows.length === 0 || !rosterMonthMatches(rows, monthLabel)) return [];
+    return parseGridSlots(rows, monthIdx, year);
   }
 
   function withinNextWeek(slot) {
