@@ -57,10 +57,11 @@
 
 <script>
   const VENUES = [
-    { key: "lkf", name: "LKF Bar", sheetId: "18k60OYTIlCBkWXOLs4rSb-NsxnWrjwNsQlfjnWpqZwA" },
-    { key: "discovery", name: "Discovery Fusion BBQ", sheetId: "1hgmPI32q6VIGeazKSpR6A_wzwP8l4sQqLMIlfZ2snng" }
+    { key: "lkf", name: "LKF Bar", sheetId: "18k60OYTIlCBkWXOLs4rSb-NsxnWrjwNsQlfjnWpqZwA", kind: "grid" },
+    { key: "discovery", name: "Discovery Fusion BBQ", sheetId: "1hgmPI32q6VIGeazKSpR6A_wzwP8l4sQqLMIlfZ2snng", kind: "flat" }
   ];
   const MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+  const MONTH_ABBR = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 
   function parseCsv(text) {
     const rows = [];
@@ -90,11 +91,30 @@
     return rows.filter(r => r.some(cell => cell !== ""));
   }
 
+  // Discovery's flat "Roster" tab: fixed name, current operational month lives
+  // in a "Month: <Month> <Year>" header cell.
   async function fetchRosterRows(sheetId) {
     const url = `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv&sheet=Roster&headers=1`;
     const res = await fetch(url);
     if (!res.ok) throw new Error(`Sheet fetch failed (${res.status})`);
     return parseCsv(await res.text());
+  }
+
+  // LKF's per-month "Roster - <Month Year>" grid tab. Returns [] if that tab
+  // doesn't exist yet -- gviz returns an HTML error page (not CSV) for a
+  // sheet name that doesn't exist, which we treat as "nothing generated yet"
+  // rather than an error.
+  async function fetchCsvBySheetName(sheetId, name) {
+    try {
+      const url = `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(name)}&headers=1`;
+      const res = await fetch(url);
+      if (!res.ok) return [];
+      const rows = parseCsv(await res.text());
+      if (rows.length && /<html/i.test(rows[0][0] || "")) return [];
+      return rows;
+    } catch (err) {
+      return [];
+    }
   }
 
   function indexHeader(headerRow) {
@@ -103,8 +123,6 @@
     return idx;
   }
 
-  // Handles either Roster tab schema: a single combined "Set Time" column
-  // (LKF's format) or split "Start"/"End" columns (Discovery's format).
   function parseRosterSlots(rows) {
     const m = /^Month:\s*([A-Za-z]+)\s+(\d{4})/.exec((rows[0][0] || "").trim());
     if (!m) throw new Error("Couldn't find 'Month: <Month> <Year>' header in Roster tab.");
@@ -134,6 +152,76 @@
       });
     }
     return slots;
+  }
+
+  function to12hLabel(hour, minute) {
+    const period = hour >= 12 ? "pm" : "am";
+    let h12 = hour % 12;
+    if (h12 === 0) h12 = 12;
+    return minute === 0 ? `${h12}${period}` : `${h12}:${String(minute).padStart(2, "0")}${period}`;
+  }
+
+  function parseTimeCell24(str) {
+    const m = /^(\d{1,2}):(\d{2})/.exec(String(str).trim());
+    if (!m) return null;
+    return { hour: parseInt(m[1], 10), minute: parseInt(m[2], 10) };
+  }
+
+  // Title cell must actually match the requested month -- gviz silently
+  // falls back to the spreadsheet's FIRST tab when a sheet name doesn't
+  // exist, so a plain "did it error?" check isn't enough.
+  function rosterMonthMatches(rows, monthLabel) {
+    const title = (rows[0] && rows[0][0] || "").trim().toUpperCase();
+    return title === monthLabel.toUpperCase();
+  }
+
+  // Parses LKF's week-by-week planning grid: WEEK header rows, then one row
+  // per set with real Start/Finish time cells and an Assigned DJ dropdown,
+  // followed by a trailing per-DJ stats block. Stops as soon as a row
+  // doesn't look like a week header or a date row ("Thursday, 2 July"),
+  // which is exactly where that stats block begins.
+  function parseGridSlots(rows, requestedMonthIdx, requestedYear) {
+    const slots = [];
+    for (let i = 2; i < rows.length; i++) {
+      const r = rows[i];
+      const colA = (r[0] || "").trim();
+      if (colA === "") continue;
+      if (/^WEEK\s+\d+$/i.test(colA)) continue;
+      if (!colA.includes(",")) break;
+
+      const [dayName, datePart] = colA.split(",").map(s => s.trim());
+      const dm = /^(\d{1,2})\s+([A-Za-z]+)$/.exec(datePart || "");
+      if (!dm) continue;
+      const dayNum = parseInt(dm[1], 10);
+      const monthIdx = MONTHS.indexOf(dm[2]);
+      if (monthIdx === -1) continue;
+      const year = monthIdx < requestedMonthIdx ? requestedYear + 1 : requestedYear;
+
+      const start = parseTimeCell24(r[1]);
+      const end = parseTimeCell24(r[2]);
+      if (!start || !end) continue;
+
+      slots.push({
+        dateLabel: `${dayNum} ${MONTH_ABBR[monthIdx]}`,
+        day: dayName,
+        setTime: `${to12hLabel(start.hour, start.minute)} – ${to12hLabel(end.hour, end.minute)}`,
+        assignedDJ: (r[4] || "").trim(),
+        dayNum, monthIdx, year
+      });
+    }
+    return slots;
+  }
+
+  async function fetchVenueSlots(venue) {
+    if (venue.kind === "grid") {
+      const now = new Date();
+      const monthLabel = `${MONTHS[now.getMonth()]} ${now.getFullYear()}`;
+      const rows = await fetchCsvBySheetName(venue.sheetId, `Roster - ${monthLabel}`);
+      if (rows.length === 0 || !rosterMonthMatches(rows, monthLabel)) return [];
+      return parseGridSlots(rows, now.getMonth(), now.getFullYear());
+    }
+    const rows = await fetchRosterRows(venue.sheetId);
+    return parseRosterSlots(rows);
   }
 
   function withinNextWeek(slot) {
@@ -193,8 +281,8 @@
     const container = document.getElementById("venues");
     try {
       const results = await Promise.all(VENUES.map(async venue => {
-        const rows = await fetchRosterRows(venue.sheetId);
-        return { venue, slots: parseRosterSlots(rows) };
+        const slots = await fetchVenueSlots(venue);
+        return { venue, slots };
       }));
 
       document.getElementById("status-msg").style.display = "none";
