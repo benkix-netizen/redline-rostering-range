@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>This Month — Redline Rostering Range</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/tabler-icons.min.css" />
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: #0a0a0c;
+    color: #fff;
+    min-height: 100vh;
+    padding: 2rem 1rem 3rem;
+  }
+  .page-wrap { max-width: 900px; margin: 0 auto; }
+  a.back { display: inline-block; margin-bottom: 1.5rem; font-size: 13px; color: #8a8a90; text-decoration: none; }
+  a.back:hover { text-decoration: underline; }
+  h1 { font-size: 22px; font-weight: 700; color: #e8e8ea; margin-bottom: 6px; }
+  p.sub { font-size: 14px; color: #8a8a90; margin-bottom: 2rem; }
+  .status-msg { font-size: 14px; color: #8a8a90; text-align: center; padding: 2rem 0; }
+  .venues { display: flex; gap: 1.5rem; flex-wrap: wrap; align-items: flex-start; }
+  .venue-col { flex: 1 1 320px; min-width: 280px; }
+  .venue-title {
+    font-size: 17px; font-weight: 700; padding-bottom: 8px;
+    margin-bottom: 1rem; border-bottom: 2px solid;
+    position: sticky; top: 0; background: #0a0a0c;
+  }
+  .venue-col.lkf .venue-title { color: #FFD700; border-color: #FFD700; }
+  .venue-col.discovery .venue-title { color: #ff8c42; border-color: #ff8c42; }
+  .day-card {
+    border-radius: 10px; padding: 0.9rem 1.1rem; margin-bottom: 0.75rem;
+    border: 1px solid rgba(255,255,255,0.08);
+  }
+  .venue-col.lkf .day-card { background: linear-gradient(160deg, #143d25, #0d2418); }
+  .venue-col.discovery .day-card { background: linear-gradient(160deg, #3a2212, #1c1008); }
+  .day-card.past { opacity: 0.45; }
+  .day-title { font-size: 13px; font-weight: 600; color: #e8e8ea; margin-bottom: 6px; }
+  .set-row {
+    display: flex; justify-content: space-between; gap: 10px;
+    font-size: 13px; padding: 4px 0; border-top: 1px solid rgba(255,255,255,0.06);
+  }
+  .set-row:first-of-type { border-top: none; }
+  .set-time { color: #c8c8cc; }
+  .set-dj { font-weight: 600; color: #fff; }
+  .set-dj.unassigned { color: #6a6a70; font-weight: 400; font-style: italic; }
+  .empty-note { font-size: 13px; color: #6a6a70; font-style: italic; }
+</style>
+</head>
+<body>
+  <div class="page-wrap">
+    <a class="back" href="index.html"><i class="ti ti-arrow-left"></i> Back</a>
+    <h1 id="page-title">This Month — Both Venues</h1>
+    <p class="sub">Every set scheduled this month across LKF Bar and Discovery Fusion BBQ. Past dates are dimmed.</p>
+    <div class="status-msg" id="status-msg"><i class="ti ti-loader"></i> Loading both rosters…</div>
+    <div class="venues" id="venues" style="display:none"></div>
+  </div>
+
+<script>
+  const VENUES = [
+    { key: "lkf", name: "LKF Bar", sheetId: "18k60OYTIlCBkWXOLs4rSb-NsxnWrjwNsQlfjnWpqZwA" },
+    { key: "discovery", name: "Discovery Fusion BBQ", sheetId: "1hgmPI32q6VIGeazKSpR6A_wzwP8l4sQqLMIlfZ2snng" }
+  ];
+  const MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+
+  function parseCsv(text) {
+    const rows = [];
+    let row = [], field = "", inQuotes = false;
+    for (let i = 0; i < text.length; i++) {
+      const c = text[i];
+      if (inQuotes) {
+        if (c === '"') {
+          if (text[i + 1] === '"') { field += '"'; i++; }
+          else { inQuotes = false; }
+        } else {
+          field += c;
+        }
+      } else if (c === '"') {
+        inQuotes = true;
+      } else if (c === ",") {
+        row.push(field); field = "";
+      } else if (c === "\n" || c === "\r") {
+        if (c === "\r" && text[i + 1] === "\n") i++;
+        row.push(field); field = "";
+        rows.push(row); row = [];
+      } else {
+        field += c;
+      }
+    }
+    if (field.length > 0 || row.length > 0) { row.push(field); rows.push(row); }
+    return rows.filter(r => r.some(cell => cell !== ""));
+  }
+
+  async function fetchRosterRows(sheetId) {
+    const url = `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv&sheet=Roster&headers=1`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`Sheet fetch failed (${res.status})`);
+    return parseCsv(await res.text());
+  }
+
+  function indexHeader(headerRow) {
+    const idx = {};
+    headerRow.forEach((name, i) => { idx[name.trim()] = i; });
+    return idx;
+  }
+
+  // Handles either Roster tab schema: a single combined "Set Time" column
+  // (LKF's format) or split "Start"/"End" columns (Discovery's format).
+  function parseRosterSlots(rows) {
+    const m = /^Month:\s*([A-Za-z]+)\s+(\d{4})/.exec((rows[0][0] || "").trim());
+    if (!m) throw new Error("Couldn't find 'Month: <Month> <Year>' header in Roster tab.");
+    const monthIdx = MONTHS.indexOf(m[1]);
+    const year = parseInt(m[2], 10);
+
+    const idx = indexHeader(rows[1]);
+    const DATE_COL = 0; // gviz can strip this header cell's text, so use its fixed position
+    const slots = [];
+    for (let i = 2; i < rows.length; i++) {
+      const r = rows[i];
+      const dateLabel = (r[DATE_COL] || "").trim();
+      if (!dateLabel) continue;
+      const dayNum = parseInt(dateLabel, 10);
+      if (Number.isNaN(dayNum)) continue;
+
+      const setTime = idx["Set Time"] > -1
+        ? (r[idx["Set Time"]] || "").trim()
+        : `${(r[idx["Start"]] || "").trim()} – ${(r[idx["End"]] || "").trim()}`;
+
+      slots.push({
+        dateLabel,
+        day: (r[idx["Day"]] || "").trim(),
+        setTime,
+        assignedDJ: (r[idx["Assigned DJ"]] || "").trim(),
+        dayNum, monthIdx, year
+      });
+    }
+    return { monthIdx, year, slots };
+  }
+
+  function isPast(slot) {
+    const slotDate = new Date(slot.year, slot.monthIdx, slot.dayNum);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    return slotDate < today;
+  }
+
+  function renderVenue(venue, monthIdx, year, slots) {
+    const col = document.createElement("div");
+    col.className = `venue-col ${venue.key}`;
+    col.innerHTML = `<div class="venue-title">${venue.name} — ${MONTHS[monthIdx]} ${year}</div>`;
+
+    if (slots.length === 0) {
+      const note = document.createElement("p");
+      note.className = "empty-note";
+      note.textContent = "Nothing scheduled this month.";
+      col.appendChild(note);
+      return col;
+    }
+
+    const byDate = [];
+    const seen = {};
+    slots.forEach(slot => {
+      const key = `${slot.dayNum}-${slot.day}`;
+      if (!(key in seen)) {
+        seen[key] = byDate.length;
+        byDate.push({ dateLabel: slot.dateLabel, day: slot.day, dayNum: slot.dayNum, slots: [] });
+      }
+      byDate[seen[key]].slots.push(slot);
+    });
+    byDate.sort((a, b) => a.dayNum - b.dayNum);
+
+    byDate.forEach(group => {
+      const card = document.createElement("div");
+      card.className = "day-card" + (isPast(group.slots[0]) ? " past" : "");
+      card.innerHTML = `<div class="day-title">${group.day}, ${group.dateLabel}</div>`;
+      group.slots.forEach(slot => {
+        const row = document.createElement("div");
+        row.className = "set-row";
+        const djLabel = slot.assignedDJ
+          ? `<span class="set-dj">${slot.assignedDJ}</span>`
+          : `<span class="set-dj unassigned">Unassigned</span>`;
+        row.innerHTML = `<span class="set-time">${slot.setTime}</span>${djLabel}`;
+        card.appendChild(row);
+      });
+      col.appendChild(card);
+    });
+
+    return col;
+  }
+
+  async function main() {
+    const container = document.getElementById("venues");
+    try {
+      const results = await Promise.all(VENUES.map(async venue => {
+        const rows = await fetchRosterRows(venue.sheetId);
+        return { venue, ...parseRosterSlots(rows) };
+      }));
+
+      document.getElementById("status-msg").style.display = "none";
+      container.style.display = "flex";
+      results.forEach(({ venue, monthIdx, year, slots }) =>
+        container.appendChild(renderVenue(venue, monthIdx, year, slots)));
+    } catch (err) {
+      console.error(err);
+      document.getElementById("status-msg").textContent = "Couldn't load one or both rosters. Please try again shortly.";
+    }
+  }
+
+  main();
+</script>
+</body>
+</html>
