@@ -18,16 +18,37 @@
   a.back { display: inline-block; margin-bottom: 1.5rem; font-size: 13px; color: #8a8a90; text-decoration: none; }
   a.back:hover { text-decoration: underline; }
   h1 { font-size: 22px; font-weight: 700; color: #e8e8ea; margin-bottom: 6px; }
-  p.sub { font-size: 14px; color: #8a8a90; margin-bottom: 2rem; }
+  p.sub { font-size: 14px; color: #8a8a90; margin-bottom: 1.5rem; }
+  .field-row { margin-bottom: 1.5rem; max-width: 320px; }
+  .field-row label {
+    display: block; font-size: 12px; font-weight: 600;
+    color: #c8c8cc; margin-bottom: 6px;
+    letter-spacing: 0.6px; text-transform: uppercase;
+  }
+  .field-row select {
+    width: 100%; padding: 10px 12px; font-size: 14px;
+    border: 1px solid rgba(255,255,255,0.15); border-radius: 8px;
+    background: #16161a; color: #fff; font-family: inherit; outline: none;
+  }
+  .field-row select:focus { border-color: #8a8a90; }
   .status-msg { font-size: 14px; color: #8a8a90; text-align: center; padding: 2rem 0; }
   .venues { display: flex; gap: 1.5rem; flex-wrap: wrap; align-items: flex-start; }
   .venue-col { flex: 1 1 320px; min-width: 280px; }
   .venue-title {
     font-size: 17px; font-weight: 700; padding-bottom: 8px;
     margin-bottom: 1rem; border-bottom: 2px solid;
+    display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap;
   }
   .venue-col.lkf .venue-title { color: #FFD700; border-color: #FFD700; }
   .venue-col.discovery .venue-title { color: #ff8c42; border-color: #ff8c42; }
+  .cal-btn {
+    font-size: 11px; font-weight: 700; padding: 6px 10px; border: 1px solid currentColor;
+    border-radius: 6px; cursor: pointer; background: transparent; color: inherit;
+    font-family: inherit; display: inline-flex; align-items: center; gap: 4px;
+    white-space: nowrap;
+  }
+  .cal-btn:hover { opacity: 0.8; }
+  .cal-btn.small { font-size: 10px; padding: 3px 8px; }
   .day-card {
     border-radius: 10px; padding: 0.9rem 1.1rem; margin-bottom: 0.75rem;
     border: 1px solid rgba(255,255,255,0.08);
@@ -36,10 +57,13 @@
   .venue-col.discovery .day-card { background: linear-gradient(160deg, #3a2212, #1c1008); }
   .day-title { font-size: 13px; font-weight: 600; color: #e8e8ea; margin-bottom: 6px; }
   .set-row {
-    display: flex; justify-content: space-between; gap: 10px;
+    display: flex; justify-content: space-between; align-items: center; gap: 10px;
     font-size: 13px; padding: 4px 0; border-top: 1px solid rgba(255,255,255,0.06);
   }
   .set-row:first-of-type { border-top: none; }
+  .set-row.mine { background: rgba(255,255,255,0.06); border-radius: 6px; padding-left: 8px; padding-right: 8px; }
+  .set-row.dimmed { opacity: 0.4; }
+  .set-info { display: flex; flex-direction: column; gap: 2px; }
   .set-time { color: #c8c8cc; }
   .set-dj { font-weight: 600; color: #fff; }
   .set-dj.unassigned { color: #6a6a70; font-weight: 400; font-style: italic; }
@@ -51,6 +75,12 @@
     <a class="back" href="index.html"><i class="ti ti-arrow-left"></i> Back</a>
     <h1>This Week — Both Venues</h1>
     <p class="sub">Everything scheduled across LKF Bar and Discovery Fusion BBQ in the next 7 days.</p>
+    <div class="field-row">
+      <label>Your name</label>
+      <select id="dj-picker">
+        <option value="">— None selected —</option>
+      </select>
+    </div>
     <div class="status-msg" id="status-msg"><i class="ti ti-loader"></i> Loading both rosters…</div>
     <div class="venues" id="venues" style="display:none"></div>
   </div>
@@ -64,13 +94,17 @@
   const VENUES = [
     {
       key: "lkf", name: "LKF Bar", sheetId: "18k60OYTIlCBkWXOLs4rSb-NsxnWrjwNsQlfjnWpqZwA",
-      tabName: (monthIdx, year) => `Roster - ${MONTHS[monthIdx]} ${year}`
+      tabName: (monthIdx, year) => `Roster - ${MONTHS[monthIdx]} ${year}`,
+      organizerName: "LKF Bar"
     },
     {
       key: "discovery", name: "Discovery Fusion BBQ", sheetId: "1hgmPI32q6VIGeazKSpR6A_wzwP8l4sQqLMIlfZ2snng",
-      tabName: (monthIdx, year) => `${MONTH_ABBR[monthIdx].toUpperCase()} ${String(year).slice(-2)}`
+      tabName: (monthIdx, year) => `${MONTH_ABBR[monthIdx].toUpperCase()} ${String(year).slice(-2)}`,
+      organizerName: "Discovery Fusion BBQ"
     }
   ];
+  const ORGANIZER_EMAIL = "benki@redlineartistry.com";
+  const TZ = "Australia/Melbourne";
   const MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
   const MONTH_ABBR = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 
@@ -188,6 +222,25 @@
     return parseGridSlots(rows, monthIdx, year);
   }
 
+  // Most recently submitted email on file for each DJ, read from the
+  // venue's own Availability tab -- same source each venue's own roster.html
+  // uses for calendar invites.
+  async function fetchEmailMap(sheetId) {
+    const rows = await fetchCsvBySheetName(sheetId, "Availability");
+    const map = {};
+    if (rows.length === 0) return map;
+    const header = rows[0].map(h => String(h).trim());
+    const nameIdx = header.indexOf("DJ name");
+    const emailIdx = header.indexOf("Email");
+    if (nameIdx === -1 || emailIdx === -1) return map;
+    for (let i = 1; i < rows.length; i++) {
+      const name = (rows[i][nameIdx] || "").trim();
+      const email = (rows[i][emailIdx] || "").trim();
+      if (name && email) map[name] = email; // later rows overwrite earlier ones (most recent wins)
+    }
+    return map;
+  }
+
   function withinNextWeek(slot) {
     const slotDate = new Date(slot.year, slot.monthIdx, slot.dayNum);
     const today = new Date();
@@ -197,12 +250,128 @@
     return slotDate >= today && slotDate < weekOut;
   }
 
-  function renderVenue(venue, slots) {
+  // --- Calendar export (.ics), adapted from each venue's own roster.html ---
+
+  function parseClock12(str) {
+    const m = /^(\d{1,2})(?::(\d{2}))?\s*(am|pm)$/i.exec(str.trim());
+    if (!m) return null;
+    let hour = parseInt(m[1], 10) % 12;
+    if (/pm/i.test(m[3])) hour += 12;
+    return { hour, minute: m[2] ? parseInt(m[2], 10) : 0 };
+  }
+
+  // Nightclub hours run ~6pm-6am; anything before 6am belongs to the day after dayNum.
+  function clockToDate(clock, dayNum, monthIdx, year) {
+    const dayOffset = clock.hour < 6 ? 1 : 0;
+    return { dayNum: dayNum + dayOffset, monthIdx, year, hour: clock.hour, minute: clock.minute };
+  }
+
+  function tzOffsetMinutes(date, timeZone) {
+    const dtf = new Intl.DateTimeFormat("en-US", {
+      timeZone, hourCycle: "h23",
+      year: "numeric", month: "2-digit", day: "2-digit",
+      hour: "2-digit", minute: "2-digit", second: "2-digit"
+    });
+    const parts = Object.fromEntries(dtf.formatToParts(date).map(p => [p.type, p.value]));
+    const asUTC = Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour, parts.minute, parts.second);
+    return (asUTC - date.getTime()) / 60000;
+  }
+
+  function melbourneLocalToUtc({ dayNum, monthIdx, year, hour, minute }) {
+    const guess = Date.UTC(year, monthIdx, dayNum, hour, minute);
+    const offsetMin = tzOffsetMinutes(new Date(guess), TZ);
+    return new Date(guess - offsetMin * 60000);
+  }
+
+  function parseSlotTimes(slot) {
+    const [startStr, endStr] = slot.setTime.split(/[–-]/).map(s => s.trim());
+    const startClock = parseClock12(startStr);
+    const endClock = parseClock12(endStr);
+    if (!startClock || !endClock) return null;
+    const startLocal = clockToDate(startClock, slot.dayNum, slot.monthIdx, slot.year);
+    const endLocal = clockToDate(endClock, slot.dayNum, slot.monthIdx, slot.year);
+    return { start: melbourneLocalToUtc(startLocal), end: melbourneLocalToUtc(endLocal) };
+  }
+
+  function icsDate(date) {
+    return date.toISOString().replace(/[-:]/g, "").split(".")[0] + "Z";
+  }
+
+  function icsEscape(str) {
+    return String(str).replace(/\\/g, "\\\\").replace(/,/g, "\\,").replace(/;/g, "\\;");
+  }
+
+  function slugify(str) {
+    return String(str).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
+  }
+
+  function buildVevent(venue, slot, djName, djEmail) {
+    const times = parseSlotTimes(slot);
+    if (!times) return null;
+    const uid = `${slot.year}${slot.monthIdx}${slot.dayNum}-${icsEscape(slot.setTime)}-${icsEscape(djName)}@${venue.key}.redlinerostering`;
+    return [
+      "BEGIN:VEVENT",
+      `UID:${uid}`,
+      `DTSTAMP:${icsDate(new Date())}`,
+      `DTSTART:${icsDate(times.start)}`,
+      `DTEND:${icsDate(times.end)}`,
+      `SUMMARY:${icsEscape(venue.name)} — ${icsEscape(djName)} set`,
+      `LOCATION:${icsEscape(venue.name)}`,
+      `ORGANIZER;CN=${icsEscape(venue.organizerName)}:mailto:${ORGANIZER_EMAIL}`,
+      `ATTENDEE;CN=${icsEscape(djName)};RSVP=TRUE:mailto:${djEmail}`,
+      "STATUS:CONFIRMED",
+      "END:VEVENT"
+    ].join("\r\n");
+  }
+
+  function buildIcs(vevents) {
+    return [
+      "BEGIN:VCALENDAR",
+      "VERSION:2.0",
+      "PRODID:-//Redline Rostering Range//Combined Roster//EN",
+      "CALSCALE:GREGORIAN",
+      ...vevents,
+      "END:VCALENDAR"
+    ].join("\r\n");
+  }
+
+  function downloadIcs(filename, vevents) {
+    const blob = new Blob([buildIcs(vevents)], { type: "text/calendar;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  // --- Rendering, with optional per-DJ personalization ---
+
+  let currentResults = []; // [{ venue, slots }]
+  let currentEmailMaps = {}; // venue.key -> { djName: email }
+
+  function renderVenue(venue, slots, selectedDJ) {
     const col = document.createElement("div");
     col.className = `venue-col ${venue.key}`;
-    col.innerHTML = `<div class="venue-title">${venue.name}</div>`;
 
     const upcoming = slots.filter(withinNextWeek);
+    const mySlots = selectedDJ ? upcoming.filter(s => s.assignedDJ === selectedDJ) : [];
+    const email = selectedDJ ? currentEmailMaps[venue.key]?.[selectedDJ] : null;
+
+    const titleWrap = document.createElement("div");
+    titleWrap.className = "venue-title";
+    titleWrap.innerHTML = `<span>${venue.name}</span>`;
+    if (selectedDJ && mySlots.length > 0 && email) {
+      const allBtn = document.createElement("button");
+      allBtn.className = "cal-btn";
+      allBtn.innerHTML = '<i class="ti ti-calendar-plus"></i> Add my sets';
+      allBtn.onclick = () => {
+        const vevents = mySlots.map(s => buildVevent(venue, s, selectedDJ, email)).filter(Boolean);
+        downloadIcs(`${slugify(venue.name)}-${slugify(selectedDJ)}-this-week.ics`, vevents);
+      };
+      titleWrap.appendChild(allBtn);
+    }
+    col.appendChild(titleWrap);
+
     if (upcoming.length === 0) {
       const note = document.createElement("p");
       note.className = "empty-note";
@@ -227,12 +396,31 @@
       card.className = "day-card";
       card.innerHTML = `<div class="day-title">${group.day}, ${group.dateLabel}</div>`;
       group.slots.forEach(slot => {
+        const isMine = selectedDJ && slot.assignedDJ === selectedDJ;
         const row = document.createElement("div");
-        row.className = "set-row";
+        row.className = "set-row" + (isMine ? " mine" : selectedDJ ? " dimmed" : "");
         const djLabel = slot.assignedDJ
           ? `<span class="set-dj">${slot.assignedDJ}</span>`
           : `<span class="set-dj unassigned">Unassigned</span>`;
-        row.innerHTML = `<span class="set-time">${slot.setTime}</span>${djLabel}`;
+        row.innerHTML = `<div class="set-info"><span class="set-time">${slot.setTime}</span>${djLabel}</div>`;
+        if (isMine) {
+          if (email) {
+            const btn = document.createElement("button");
+            btn.className = "cal-btn small";
+            btn.innerHTML = '<i class="ti ti-calendar-plus"></i> Add';
+            btn.onclick = () => {
+              const vevent = buildVevent(venue, slot, selectedDJ, email);
+              if (vevent) downloadIcs(`${slugify(venue.name)}-${slugify(selectedDJ)}-${slugify(slot.dateLabel)}.ics`, [vevent]);
+            };
+            row.appendChild(btn);
+          } else {
+            const note = document.createElement("span");
+            note.style.fontSize = "11px";
+            note.style.color = "#8a8a90";
+            note.textContent = "No email on file";
+            row.appendChild(note);
+          }
+        }
         card.appendChild(row);
       });
       col.appendChild(card);
@@ -241,17 +429,40 @@
     return col;
   }
 
+  function renderAll(selectedDJ) {
+    const container = document.getElementById("venues");
+    container.innerHTML = "";
+    currentResults.forEach(({ venue, slots }) => container.appendChild(renderVenue(venue, slots, selectedDJ)));
+  }
+
+  function populateDjPicker() {
+    const names = new Set();
+    currentResults.forEach(({ slots }) => slots.forEach(s => { if (s.assignedDJ) names.add(s.assignedDJ); }));
+    const picker = document.getElementById("dj-picker");
+    [...names].sort().forEach(name => {
+      const opt = document.createElement("option");
+      opt.value = name;
+      opt.textContent = name;
+      picker.appendChild(opt);
+    });
+    picker.addEventListener("change", () => renderAll(picker.value));
+  }
+
   async function main() {
     const container = document.getElementById("venues");
     try {
-      const results = await Promise.all(VENUES.map(async venue => {
-        const slots = await fetchVenueSlots(venue);
-        return { venue, slots };
-      }));
+      const [slotResults, emailMapResults] = await Promise.all([
+        Promise.all(VENUES.map(async venue => ({ venue, slots: await fetchVenueSlots(venue) }))),
+        Promise.all(VENUES.map(async venue => ({ key: venue.key, map: await fetchEmailMap(venue.sheetId) })))
+      ]);
+
+      currentResults = slotResults;
+      emailMapResults.forEach(({ key, map }) => { currentEmailMaps[key] = map; });
 
       document.getElementById("status-msg").style.display = "none";
       container.style.display = "flex";
-      results.forEach(({ venue, slots }) => container.appendChild(renderVenue(venue, slots)));
+      populateDjPicker();
+      renderAll("");
     } catch (err) {
       console.error(err);
       document.getElementById("status-msg").textContent = "Couldn't load one or both rosters. Please try again shortly.";
