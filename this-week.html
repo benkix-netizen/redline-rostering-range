@@ -14,7 +14,7 @@
     min-height: 100vh;
     padding: 2rem 1rem 3rem;
   }
-  .page-wrap { max-width: 900px; margin: 0 auto; }
+  .page-wrap { max-width: 1200px; margin: 0 auto; }
   a.back { display: inline-block; margin-bottom: 1.5rem; font-size: 13px; color: #8a8a90; text-decoration: none; }
   a.back:hover { text-decoration: underline; }
   h1 { font-size: 22px; font-weight: 700; color: #e8e8ea; margin-bottom: 6px; }
@@ -41,6 +41,7 @@
   }
   .venue-col.lkf .venue-title { color: #FFD700; border-color: #FFD700; }
   .venue-col.discovery .venue-title { color: #ff8c42; border-color: #ff8c42; }
+  .venue-col.events .venue-title { color: #ff4d6d; border-color: #ff4d6d; }
   .cal-btn {
     font-size: 11px; font-weight: 700; padding: 6px 10px; border: 1px solid currentColor;
     border-radius: 6px; cursor: pointer; background: transparent; color: inherit;
@@ -55,7 +56,14 @@
   }
   .venue-col.lkf .day-card { background: linear-gradient(160deg, #143d25, #0d2418); }
   .venue-col.discovery .day-card { background: linear-gradient(160deg, #3a2212, #1c1008); }
+  .venue-col.events .day-card { background: linear-gradient(160deg, #3d1420, #240d16); }
+  .day-card.cancelled { opacity: 0.5; }
   .day-title { font-size: 13px; font-weight: 600; color: #e8e8ea; margin-bottom: 6px; }
+  .day-sub { font-size: 11px; color: #8a8a90; margin-bottom: 8px; margin-top: -4px; }
+  .evt-cancelled-tag {
+    font-size: 10px; font-weight: 700; color: #fecaca; border: 1px solid #ef4444;
+    border-radius: 999px; padding: 1px 8px; margin-left: 6px;
+  }
   .set-row {
     display: flex; justify-content: space-between; align-items: center; gap: 10px;
     font-size: 13px; padding: 4px 0; border-top: 1px solid rgba(255,255,255,0.06);
@@ -73,8 +81,8 @@
 <body>
   <div class="page-wrap">
     <a class="back" href="index.html"><i class="ti ti-arrow-left"></i> Back</a>
-    <h1>This Week — Both Venues</h1>
-    <p class="sub">Everything scheduled across LKF Bar and Discovery Fusion BBQ in the next 7 days.</p>
+    <h1>This Week — All Venues</h1>
+    <p class="sub">Everything scheduled across LKF Bar, Discovery Fusion BBQ, and Special Events in the next 7 days.</p>
     <div class="field-row">
       <label>Your name</label>
       <select id="dj-picker">
@@ -107,6 +115,13 @@
   const TZ = "Australia/Melbourne";
   const MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
   const MONTH_ABBR = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+
+  // Special Events lives on its own Sheet, in a flat one-row-per-slot tab
+  // (not a per-month grid like the two venues), so it's fetched and rendered
+  // through a separate path rather than being shoehorned into VENUES.
+  const EVENTS_SHEET_ID = "1HTuwQ4KZ2-UnH6HvytPC4DIfl8nKWJjIwXJxL97fQaU";
+  const EVENTS_SHEET_NAME = "Events";
+  const EVENTS_AVAILABILITY_SHEET_NAME = "Availability";
 
   function parseCsv(text) {
     const rows = [];
@@ -151,6 +166,136 @@
     } catch (err) {
       return [];
     }
+  }
+
+  function indexHeader(headerRow) {
+    const idx = {};
+    headerRow.forEach((h, i) => { idx[String(h).trim()] = i; });
+    return idx;
+  }
+
+  // The Events tab's Date column is meant to be plain ISO text, but Sheets can
+  // still auto-convert a cell into a real Date before Plain Text formatting
+  // is applied -- gviz then exports that cell's locale-dependent display
+  // string instead of literal ISO text. This normalizes whatever comes back
+  // into canonical "yyyy-MM-dd".
+  function normalizeDateStr(raw) {
+    const s = String(raw || "").trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+    let m = /^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/.exec(s);
+    if (m) {
+      let [, d, mo, y] = m;
+      if (y.length === 2) y = (Number(y) < 70 ? "20" : "19") + y;
+      return `${y}-${mo.padStart(2, "0")}-${d.padStart(2, "0")}`;
+    }
+    const dt = new Date(s);
+    if (!isNaN(dt.getTime())) {
+      return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`;
+    }
+    return s;
+  }
+
+  async function fetchEventsRows() {
+    const rows = await fetchCsvBySheetName(EVENTS_SHEET_ID, EVENTS_SHEET_NAME);
+    if (rows.length < 2) return [];
+    const idx = indexHeader(rows[0]);
+    return rows.slice(1).map(r => ({
+      date: normalizeDateStr(r[idx["Date"]]),
+      label: (r[idx["Label"]] || "").trim(),
+      location: (r[idx["Location"]] || "").trim(),
+      status: (r[idx["Status"]] || "").trim(),
+      role: (r[idx["Role"]] || "").trim(),
+      start: (r[idx["Start"]] || "").trim(),
+      end: (r[idx["End"]] || "").trim(),
+      room: (r[idx["Room"]] || "").trim(),
+      assigned: (r[idx["Assigned"]] || "").trim()
+    })).filter(r => r.date && r.label && r.role);
+  }
+
+  // Most recently submitted email on file per crew member, from Events' own
+  // Availability tab -- same source events-availability/roster.html uses.
+  async function fetchEventsEmailMap() {
+    const rows = await fetchCsvBySheetName(EVENTS_SHEET_ID, EVENTS_AVAILABILITY_SHEET_NAME);
+    const map = {};
+    if (rows.length < 2) return map;
+    const idx = indexHeader(rows[0]);
+    rows.slice(1).forEach(r => {
+      const name = (r[idx["Name"]] || "").trim();
+      const email = (r[idx["Email"]] || "").trim();
+      if (name && email) map[name] = email;
+    });
+    return map;
+  }
+
+  // Groups flat Events rows by Date+Label -- Date alone isn't a unique key,
+  // since two events can land on the same date.
+  function groupEventsByLabel(rows) {
+    const byEvent = {};
+    rows.forEach(r => {
+      const key = r.date + "|" + r.label;
+      if (!byEvent[key]) byEvent[key] = { date: r.date, label: r.label, location: r.location, status: r.status, slots: [] };
+      byEvent[key].slots.push(r);
+    });
+    return Object.values(byEvent);
+  }
+
+  // Events' Start/End cells are plain 24h "HH:MM" text (unlike the venues'
+  // pre-formatted 12h setTime ranges), so it needs its own clock parser.
+  function parseClockFlexible(str) {
+    str = String(str).trim();
+    let m = /^(\d{1,2}):(\d{2})$/.exec(str);
+    if (m) {
+      const hour = parseInt(m[1], 10);
+      const minute = parseInt(m[2], 10);
+      if (hour >= 0 && hour <= 23) return { hour, minute };
+    }
+    m = /^(\d{1,2})(?::(\d{2}))?\s*(am|pm)$/i.exec(str);
+    if (m) {
+      let hour = parseInt(m[1], 10) % 12;
+      if (/pm/i.test(m[3])) hour += 12;
+      return { hour, minute: m[2] ? parseInt(m[2], 10) : 0 };
+    }
+    return null;
+  }
+
+  function formatShortTime(str) {
+    const clock = parseClockFlexible(str);
+    if (!clock) return str;
+    let h = clock.hour % 12;
+    if (h === 0) h = 12;
+    const suffix = clock.hour < 12 ? "am" : "pm";
+    const mins = clock.minute ? ":" + String(clock.minute).padStart(2, "0") : "";
+    return `${h}${mins}${suffix}`;
+  }
+
+  // Nightclub hours run ~6pm-6am; anything before 6am belongs to the day
+  // after the event's Date. Shares melbourneLocalToUtc's {dayNum,monthIdx,
+  // year,hour,minute} shape so no separate timezone conversion is needed.
+  function eventClockToDate(clock, dateIso) {
+    const [y, m, d] = dateIso.split("-").map(Number);
+    const dayOffset = clock.hour < 6 ? 1 : 0;
+    return { dayNum: d + dayOffset, monthIdx: m - 1, year: y, hour: clock.hour, minute: clock.minute };
+  }
+
+  function buildEventVevent(ev, slot, name, email) {
+    const startClock = parseClockFlexible(slot.start);
+    const endClock = parseClockFlexible(slot.end);
+    if (!startClock || !endClock) return null;
+    const startLocal = eventClockToDate(startClock, ev.date);
+    const endLocal = eventClockToDate(endClock, ev.date);
+    const uid = `${ev.date}-${slot.role}-${slot.start}-${slot.room}-${icsEscape(name)}@events.redlinerostering`.replace(/\s+/g, "");
+    return [
+      "BEGIN:VEVENT",
+      `UID:${uid}`,
+      `DTSTAMP:${icsDate(new Date())}`,
+      `DTSTART:${icsDate(melbourneLocalToUtc(startLocal))}`,
+      `DTEND:${icsDate(melbourneLocalToUtc(endLocal))}`,
+      `SUMMARY:${icsEscape(ev.label)} — ${icsEscape(slot.role)}${slot.room ? " (" + icsEscape(slot.room) + ")" : ""}`,
+      `LOCATION:${icsEscape(ev.location)}`,
+      email ? `ATTENDEE;CN=${icsEscape(name)};RSVP=TRUE:mailto:${email}` : "",
+      "STATUS:CONFIRMED",
+      "END:VEVENT"
+    ].filter(Boolean).join("\r\n");
   }
 
   function to12hLabel(hour, minute) {
@@ -248,6 +393,14 @@
     const weekOut = new Date(today);
     weekOut.setDate(weekOut.getDate() + 7);
     return slotDate >= today && slotDate < weekOut;
+  }
+
+  function withinNextWeekIso(dateIso) {
+    const today = new Date().toLocaleDateString("en-CA", { timeZone: TZ });
+    const weekOutDate = new Date();
+    weekOutDate.setDate(weekOutDate.getDate() + 7);
+    const weekOut = weekOutDate.toLocaleDateString("en-CA", { timeZone: TZ });
+    return dateIso >= today && dateIso < weekOut;
   }
 
   // --- Calendar export (.ics), adapted from each venue's own roster.html ---
@@ -348,6 +501,89 @@
 
   let currentResults = []; // [{ venue, slots }]
   let currentEmailMaps = {}; // venue.key -> { djName: email }
+  let eventsData = []; // [{ date, label, location, status, slots }]
+  let eventsEmailMap = {}; // name -> email
+
+  function renderEventsColumn(events, selectedDJ) {
+    const col = document.createElement("div");
+    col.className = "venue-col events";
+
+    const mySlots = selectedDJ
+      ? events.flatMap(ev => ev.slots.filter(s => s.assigned === selectedDJ).map(s => ({ ev, s })))
+      : [];
+    const email = selectedDJ ? eventsEmailMap[selectedDJ] : null;
+
+    const titleWrap = document.createElement("div");
+    titleWrap.className = "venue-title";
+    titleWrap.innerHTML = `<span>Special Events</span>`;
+    if (selectedDJ && mySlots.length > 0 && email) {
+      const allBtn = document.createElement("button");
+      allBtn.className = "cal-btn";
+      allBtn.innerHTML = '<i class="ti ti-calendar-plus"></i> Add my sets';
+      allBtn.onclick = () => {
+        const vevents = mySlots.map(({ ev, s }) => buildEventVevent(ev, s, selectedDJ, email)).filter(Boolean);
+        downloadIcs(`events-${slugify(selectedDJ)}-this-week.ics`, vevents);
+      };
+      titleWrap.appendChild(allBtn);
+    }
+    col.appendChild(titleWrap);
+
+    if (events.length === 0) {
+      const note = document.createElement("p");
+      note.className = "empty-note";
+      note.textContent = "Nothing scheduled in the next 7 days.";
+      col.appendChild(note);
+      return col;
+    }
+
+    events
+      .slice()
+      .sort((a, b) => a.date.localeCompare(b.date))
+      .forEach(ev => {
+        const [y, m, d] = ev.date.split("-").map(Number);
+        const dateObj = new Date(y, m - 1, d);
+        const day = dateObj.toLocaleDateString("en-AU", { weekday: "long" });
+        const dateLabel = `${d} ${MONTH_ABBR[m - 1]}`;
+        const cancelled = ev.status === "Cancelled";
+
+        const card = document.createElement("div");
+        card.className = "day-card" + (cancelled ? " cancelled" : "");
+        card.innerHTML = `<div class="day-title">${ev.label}${cancelled ? '<span class="evt-cancelled-tag">Cancelled</span>' : ""}</div>` +
+          `<div class="day-sub">${day}, ${dateLabel}${ev.location ? " · " + ev.location : ""}</div>`;
+
+        ev.slots.forEach(slot => {
+          const isMine = selectedDJ && slot.assigned === selectedDJ;
+          const row = document.createElement("div");
+          row.className = "set-row" + (isMine ? " mine" : selectedDJ ? " dimmed" : "");
+          const djLabel = slot.assigned
+            ? `<span class="set-dj">${slot.assigned}</span>`
+            : `<span class="set-dj unassigned">Unassigned</span>`;
+          row.innerHTML = `<div class="set-info"><span class="set-time">${slot.role} · ${formatShortTime(slot.start)}–${formatShortTime(slot.end)}${slot.room ? " (" + slot.room + ")" : ""}</span>${djLabel}</div>`;
+          if (isMine) {
+            if (email) {
+              const btn = document.createElement("button");
+              btn.className = "cal-btn small";
+              btn.innerHTML = '<i class="ti ti-calendar-plus"></i> Add';
+              btn.onclick = () => {
+                const vevent = buildEventVevent(ev, slot, selectedDJ, email);
+                if (vevent) downloadIcs(`${slugify(ev.label)}-${slugify(slot.role)}-${ev.date}.ics`, [vevent]);
+              };
+              row.appendChild(btn);
+            } else {
+              const note = document.createElement("span");
+              note.style.fontSize = "11px";
+              note.style.color = "#8a8a90";
+              note.textContent = "No email on file";
+              row.appendChild(note);
+            }
+          }
+          card.appendChild(row);
+        });
+        col.appendChild(card);
+      });
+
+    return col;
+  }
 
   function renderVenue(venue, slots, selectedDJ) {
     const col = document.createElement("div");
@@ -433,11 +669,13 @@
     const container = document.getElementById("venues");
     container.innerHTML = "";
     currentResults.forEach(({ venue, slots }) => container.appendChild(renderVenue(venue, slots, selectedDJ)));
+    container.appendChild(renderEventsColumn(eventsData, selectedDJ));
   }
 
   function populateDjPicker() {
     const names = new Set();
     currentResults.forEach(({ slots }) => slots.forEach(s => { if (s.assignedDJ) names.add(s.assignedDJ); }));
+    eventsData.forEach(ev => ev.slots.forEach(s => { if (s.assigned) names.add(s.assigned); }));
     const picker = document.getElementById("dj-picker");
     [...names].sort().forEach(name => {
       const opt = document.createElement("option");
@@ -451,13 +689,17 @@
   async function main() {
     const container = document.getElementById("venues");
     try {
-      const [slotResults, emailMapResults] = await Promise.all([
+      const [slotResults, emailMapResults, eventsRows, eventsEmails] = await Promise.all([
         Promise.all(VENUES.map(async venue => ({ venue, slots: await fetchVenueSlots(venue) }))),
-        Promise.all(VENUES.map(async venue => ({ key: venue.key, map: await fetchEmailMap(venue.sheetId) })))
+        Promise.all(VENUES.map(async venue => ({ key: venue.key, map: await fetchEmailMap(venue.sheetId) }))),
+        fetchEventsRows(),
+        fetchEventsEmailMap()
       ]);
 
       currentResults = slotResults;
       emailMapResults.forEach(({ key, map }) => { currentEmailMaps[key] = map; });
+      eventsData = groupEventsByLabel(eventsRows.filter(r => withinNextWeekIso(r.date)));
+      eventsEmailMap = eventsEmails;
 
       document.getElementById("status-msg").style.display = "none";
       container.style.display = "flex";
