@@ -35,7 +35,7 @@
     gap: 1.25rem;
     flex-wrap: wrap;
     justify-content: center;
-    max-width: 760px;
+    max-width: 1080px;
   }
   .card {
     width: 320px;
@@ -54,12 +54,14 @@
   }
   .card.lkf { background: linear-gradient(160deg, #143d25, #0d2418); }
   .card.discovery { background: linear-gradient(160deg, #3a2212, #1c1008); }
+  .card.events { background: linear-gradient(160deg, #3d1420, #240d16); }
   .card .venue {
     font-size: 19px;
     font-weight: 700;
   }
   .card.lkf .venue { color: #FFD700; }
   .card.discovery .venue { color: #ff8c42; }
+  .card.events .venue { color: #ff4d6d; }
   .card .desc {
     font-size: 13px;
     color: #c8c8cc;
@@ -73,6 +75,7 @@
   }
   .card.lkf .cta { color: #FFD700; }
   .card.discovery .cta { color: #ff8c42; }
+  .card.events .cta { color: #ff4d6d; }
   .banner {
     width: 100%;
     max-width: 900px;
@@ -97,6 +100,11 @@
     <a class="card discovery" href="https://benkix-netizen.github.io/discovery-fusion-bbq-availability/roster.html">
       <span class="venue">Discovery Fusion BBQ</span>
       <span class="desc">DJ roster, calendar invites, and availability form.</span>
+      <span class="cta">View roster →</span>
+    </a>
+    <a class="card events" href="https://benkix-netizen.github.io/events-availability/roster.html">
+      <span class="venue">Special Events</span>
+      <span class="desc">One-off event crew roster, calendar invites, and availability form.</span>
       <span class="cta">View roster →</span>
     </a>
   </div>
