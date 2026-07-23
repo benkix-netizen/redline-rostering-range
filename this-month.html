@@ -44,6 +44,7 @@
   .venue-col.lkf .venue-title { color: #FFD700; border-color: #FFD700; }
   .venue-col.discovery .venue-title { color: #ff8c42; border-color: #ff8c42; }
   .venue-col.events .venue-title { color: #ff4d6d; border-color: #ff4d6d; }
+  .venue-col.neo .venue-title { color: #c6ff3d; border-color: #c6ff3d; }
   .cal-btn {
     font-size: 11px; font-weight: 700; padding: 6px 10px; border: 1px solid currentColor;
     border-radius: 6px; cursor: pointer; background: transparent; color: inherit;
@@ -59,6 +60,7 @@
   .venue-col.lkf .day-card { background: linear-gradient(160deg, #143d25, #0d2418); }
   .venue-col.discovery .day-card { background: linear-gradient(160deg, #3a2212, #1c1008); }
   .venue-col.events .day-card { background: linear-gradient(160deg, #3d1420, #240d16); }
+  .venue-col.neo .day-card { background: linear-gradient(160deg, #3a1a66, #0d0710); }
   .day-card.past { opacity: 0.45; }
   .day-card.cancelled { opacity: 0.5; }
   .day-title { font-size: 13px; font-weight: 600; color: #e8e8ea; margin-bottom: 6px; }
@@ -85,7 +87,7 @@
   <div class="page-wrap">
     <a class="back" href="index.html"><i class="ti ti-arrow-left"></i> Back</a>
     <h1 id="page-title">This Month — All Venues</h1>
-    <p class="sub">Every set scheduled this month across LKF Bar, Discovery Fusion BBQ, and Special Events. Past dates are dimmed.</p>
+    <p class="sub">Every set scheduled this month across LKF Bar, Discovery Fusion BBQ, Special Events, and Neo. Past dates are dimmed.</p>
     <div class="field-row">
       <label>Your name</label>
       <select id="dj-picker">
@@ -213,6 +215,105 @@
       room: (r[idx["Room"]] || "").trim(),
       assigned: (r[idx["Assigned"]] || "").trim()
     })).filter(r => r.date && r.label && r.role);
+  }
+
+  // Neo lives on its own Sheet, in a hand-formatted week-by-week grid per
+  // month (role-in-column-A, date-in-a-header-row) -- neither the two
+  // venues' per-DJ grid shape nor Events' flat one-row-per-slot tab, so it
+  // gets its own fetch/parse/render path too, mirroring the shape used by
+  // neo-availability/roster.html.
+  const NEO_SHEET_ID = "1hw_Pa2fzNC18LoXNs2BPZA1caFtNi2-gxE7wYj9AhXs";
+  const NEO_ENTERTAINMENT_ROLES = ["MC", "Open", "Premain", "Main 1", "Main 2", "Close"];
+  const NEO_MEDIA_ROLES = ["Photographer", "Social Media", "Videographer"];
+  const NEO_ALL_ROLES = [...NEO_ENTERTAINMENT_ROLES, ...NEO_MEDIA_ROLES];
+
+  function neoTabName(monthIdx, year) {
+    return `${MONTH_ABBR[monthIdx].toUpperCase()} ${String(year).slice(-2)}`;
+  }
+
+  const NEO_DATE_CELL_RE = /^(\d{2})-([A-Za-z]{3})-(\d{2})$/;
+  function parseNeoDateCell(cell) {
+    const m = NEO_DATE_CELL_RE.exec(String(cell || "").trim());
+    if (!m) return null;
+    const day = parseInt(m[1], 10);
+    const monthIdx = MONTH_ABBR.indexOf(m[2]);
+    if (monthIdx === -1) return null;
+    const year = 2000 + parseInt(m[3], 10);
+    return `${year}-${String(monthIdx + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+  }
+
+  // Same week-header / section-marker skipping approach as
+  // neo-availability/roster.html's parseMonthGrid.
+  function parseNeoMonthGrid(rows) {
+    const slots = [];
+    let currentDate = null;
+    rows.forEach(r => {
+      const a = (r[0] || "").trim();
+      const b = (r[1] || "").trim();
+      const c = (r[2] || "").trim();
+      const d = (r[3] || "").trim();
+      if (a === "" && b && b === c && c === d && parseNeoDateCell(b)) {
+        currentDate = parseNeoDateCell(b);
+        return;
+      }
+      if (!currentDate) return;
+      if (NEO_ALL_ROLES.includes(a)) {
+        slots.push({ date: currentDate, role: a, start: b, end: c, assigned: d });
+      }
+    });
+    return slots;
+  }
+
+  function neoMonthMatches(rows, monthIdx, year) {
+    const title = (rows[0] && rows[0][0] || "").trim();
+    return title.toLowerCase() === `${MONTHS[monthIdx]} ${year}`.toLowerCase();
+  }
+
+  async function fetchNeoSlots() {
+    const now = new Date();
+    const monthIdx = now.getMonth(), year = now.getFullYear();
+    const rows = await fetchCsvBySheetName(NEO_SHEET_ID, neoTabName(monthIdx, year));
+    if (rows.length === 0 || !neoMonthMatches(rows, monthIdx, year)) return [];
+    return parseNeoMonthGrid(rows);
+  }
+
+  async function fetchNeoEmailMap() {
+    const rows = await fetchCsvBySheetName(NEO_SHEET_ID, "Crew");
+    const map = {};
+    if (rows.length < 2) return map;
+    const idx = indexHeader(rows[0]);
+    rows.slice(1).forEach(r => {
+      const name = (r[idx["Name"]] || "").trim();
+      const email = (r[idx["Email"]] || "").trim();
+      if (name && email) map[name] = email;
+    });
+    return map;
+  }
+
+  function isNeoDatePast(dateIso) {
+    const today = new Date().toLocaleDateString("en-CA", { timeZone: TZ });
+    return dateIso < today;
+  }
+
+  function buildNeoVevent(slot, name, email) {
+    const startClock = parseClockFlexible(slot.start);
+    if (!startClock) return null;
+    const endClock = parseClockFlexible(slot.end) || { hour: (startClock.hour + 2) % 24, minute: startClock.minute };
+    const startLocal = eventClockToDate(startClock, slot.date);
+    const endLocal = eventClockToDate(endClock, slot.date);
+    const uid = `${slot.date}-${slot.role}-${slot.start}-${icsEscape(name)}@neo.redlinerostering`.replace(/\s+/g, "");
+    return [
+      "BEGIN:VEVENT",
+      `UID:${uid}`,
+      `DTSTAMP:${icsDate(new Date())}`,
+      `DTSTART:${icsDate(melbourneLocalToUtc(startLocal))}`,
+      `DTEND:${icsDate(melbourneLocalToUtc(endLocal))}`,
+      `SUMMARY:Neo — ${icsEscape(slot.role)}`,
+      "LOCATION:Neo",
+      email ? `ATTENDEE;CN=${icsEscape(name)};RSVP=TRUE:mailto:${email}` : "",
+      "STATUS:CONFIRMED",
+      "END:VEVENT"
+    ].filter(Boolean).join("\r\n");
   }
 
   // Most recently submitted email on file per crew member, from Events' own
@@ -509,6 +610,8 @@
   let currentEmailMaps = {}; // venue.key -> { djName: email }
   let eventsData = []; // [{ date, label, location, status, slots }]
   let eventsEmailMap = {}; // name -> email
+  let neoSlots = [];
+  let neoEmailMap = {};
 
   function renderEventsColumn(events, selectedDJ) {
     const col = document.createElement("div");
@@ -588,6 +691,91 @@
         });
         col.appendChild(card);
       });
+
+    return col;
+  }
+
+  function renderNeoColumn(slots, selectedDJ, neoEmailMap) {
+    const col = document.createElement("div");
+    col.className = "venue-col neo";
+
+    const mySlots = selectedDJ ? slots.filter(s => s.assigned === selectedDJ) : [];
+    const email = selectedDJ ? neoEmailMap[selectedDJ] : null;
+
+    const titleWrap = document.createElement("div");
+    titleWrap.className = "venue-title";
+    titleWrap.innerHTML = `<span class="label">Neo — ${MONTHS[new Date().getMonth()]} ${new Date().getFullYear()}</span>`;
+    if (selectedDJ && mySlots.length > 0 && email) {
+      const allBtn = document.createElement("button");
+      allBtn.className = "cal-btn";
+      allBtn.innerHTML = '<i class="ti ti-calendar-plus"></i> Add my sets';
+      allBtn.onclick = () => {
+        const vevents = mySlots.map(s => buildNeoVevent(s, selectedDJ, email)).filter(Boolean);
+        downloadIcs(`neo-${slugify(selectedDJ)}-${slugify(MONTHS[new Date().getMonth()])}.ics`, vevents);
+      };
+      titleWrap.appendChild(allBtn);
+    }
+    col.appendChild(titleWrap);
+
+    if (slots.length === 0) {
+      const note = document.createElement("p");
+      note.className = "empty-note";
+      note.textContent = "Nothing scheduled this month.";
+      col.appendChild(note);
+      return col;
+    }
+
+    const byDate = {};
+    slots.forEach(s => {
+      if (!byDate[s.date]) byDate[s.date] = [];
+      byDate[s.date].push(s);
+    });
+
+    Object.keys(byDate).sort().forEach(date => {
+      const [y, m, d] = date.split("-").map(Number);
+      const dateObj = new Date(y, m - 1, d);
+      const day = dateObj.toLocaleDateString("en-AU", { weekday: "long" });
+      const dateLabel = `${d} ${MONTH_ABBR[m - 1]}`;
+      const past = isNeoDatePast(date);
+
+      const card = document.createElement("div");
+      card.className = "day-card" + (past ? " past" : "");
+      card.innerHTML = `<div class="day-title">${day}, ${dateLabel}</div>`;
+
+      byDate[date]
+        .slice()
+        .sort((a, b) => NEO_ALL_ROLES.indexOf(a.role) - NEO_ALL_ROLES.indexOf(b.role))
+        .forEach(slot => {
+          const isMine = selectedDJ && slot.assigned === selectedDJ;
+          const row = document.createElement("div");
+          row.className = "set-row" + (isMine ? " mine" : selectedDJ ? " dimmed" : "");
+          const djLabel = slot.assigned
+            ? `<span class="set-dj">${slot.assigned}</span>`
+            : `<span class="set-dj unassigned">Unassigned</span>`;
+          const timeText = slot.end ? `${formatShortTime(slot.start)}–${formatShortTime(slot.end)}` : formatShortTime(slot.start);
+          row.innerHTML = `<div class="set-info"><span class="set-time">${slot.role} · ${timeText}</span>${djLabel}</div>`;
+          if (isMine) {
+            if (email) {
+              const btn = document.createElement("button");
+              btn.className = "cal-btn small";
+              btn.innerHTML = '<i class="ti ti-calendar-plus"></i> Add';
+              btn.onclick = () => {
+                const vevent = buildNeoVevent(slot, selectedDJ, email);
+                if (vevent) downloadIcs(`neo-${slugify(slot.role)}-${slot.date}.ics`, [vevent]);
+              };
+              row.appendChild(btn);
+            } else {
+              const note = document.createElement("span");
+              note.style.fontSize = "11px";
+              note.style.color = "#8a8a90";
+              note.textContent = "No email on file";
+              row.appendChild(note);
+            }
+          }
+          card.appendChild(row);
+        });
+      col.appendChild(card);
+    });
 
     return col;
   }
@@ -681,12 +869,14 @@
     currentResults.forEach(({ venue, monthIdx, year, slots }) =>
       container.appendChild(renderVenue(venue, monthIdx, year, slots, selectedDJ)));
     container.appendChild(renderEventsColumn(eventsData, selectedDJ));
+    container.appendChild(renderNeoColumn(neoSlots, selectedDJ, neoEmailMap));
   }
 
   function populateDjPicker() {
     const names = new Set();
     currentResults.forEach(({ slots }) => slots.forEach(s => { if (s.assignedDJ) names.add(s.assignedDJ); }));
     eventsData.forEach(ev => ev.slots.forEach(s => { if (s.assigned) names.add(s.assigned); }));
+    neoSlots.forEach(s => { if (s.assigned) names.add(s.assigned); });
     const picker = document.getElementById("dj-picker");
     [...names].sort().forEach(name => {
       const opt = document.createElement("option");
@@ -700,20 +890,24 @@
   async function main() {
     const container = document.getElementById("venues");
     try {
-      const [slotResults, emailMapResults, eventsRows, eventsEmails] = await Promise.all([
+      const [slotResults, emailMapResults, eventsRows, eventsEmails, neoSlotResults, neoEmails] = await Promise.all([
         Promise.all(VENUES.map(async venue => {
           const data = await fetchVenueData(venue);
           return { venue, ...data };
         })),
         Promise.all(VENUES.map(async venue => ({ key: venue.key, map: await fetchEmailMap(venue.sheetId) }))),
         fetchEventsRows(),
-        fetchEventsEmailMap()
+        fetchEventsEmailMap(),
+        fetchNeoSlots(),
+        fetchNeoEmailMap()
       ]);
 
       currentResults = slotResults;
       emailMapResults.forEach(({ key, map }) => { currentEmailMaps[key] = map; });
       eventsData = groupEventsByLabel(eventsRows.filter(r => withinCurrentMonthIso(r.date)));
       eventsEmailMap = eventsEmails;
+      neoSlots = neoSlotResults;
+      neoEmailMap = neoEmails;
 
       document.getElementById("status-msg").style.display = "none";
       container.style.display = "flex";
