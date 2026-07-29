@@ -222,7 +222,8 @@
   const NEO_SHEET_ID = "1hw_Pa2fzNC18LoXNs2BPZA1caFtNi2-gxE7wYj9AhXs";
   const NEO_ENTERTAINMENT_ROLES = ["MC", "Open", "Premain", "Main 1", "Main 2", "Close"];
   const NEO_MEDIA_ROLES = ["Photographer", "Social Media", "Videographer"];
-  const NEO_ALL_ROLES = [...NEO_ENTERTAINMENT_ROLES, ...NEO_MEDIA_ROLES];
+  const NEO_STAFF_ROLES = ["Register", "Guestlist", "Freelist", "VIP/Cut-in", "Second Door", "Cloak", "Bottle Girl", "VIP Door"];
+  const NEO_ALL_ROLES = [...NEO_ENTERTAINMENT_ROLES, ...NEO_MEDIA_ROLES, ...NEO_STAFF_ROLES];
 
   function neoTabName(monthIdx, year) {
     return `${MONTH_ABBR[monthIdx].toUpperCase()} ${String(year).slice(-2)}`;
